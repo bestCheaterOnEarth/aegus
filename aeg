@@ -32,7 +32,7 @@ local Library = {
     FontColor = Color3.fromRGB(255, 255, 255);
     MainColor = Color3.fromRGB(28, 28, 28);
     BackgroundColor = Color3.fromRGB(20, 20, 20);
-    AccentColor = Color3.fromRGB(255, 182, 193);
+    AccentColor = Color3.fromRGB(137, 207, 240);
     OutlineColor = Color3.fromRGB(50, 50, 50);
     RiskColor = Color3.fromRGB(255, 50, 50),
 
@@ -44,9 +44,6 @@ local Library = {
 
     Signals = {};
     ScreenGui = ScreenGui;
-
-    BypassActive = false;
-    HiddenToggles = {};
 };
 
 local RainbowStep = 0
@@ -356,6 +353,16 @@ function Library:RemoveFromRegistry(Instance)
 end;
 
 function Library:UpdateColorsUsingRegistry()
+    -- TODO: Could have an 'active' list of objects
+    -- where the active list only contains Visible objects.
+
+    -- IMPL: Could setup .Changed events on the AddToRegistry function
+    -- that listens for the 'Visible' propert being changed.
+    -- Visible: true => Add to active list, and call UpdateColors function
+    -- Visible: false => Remove from active list.
+
+    -- The above would be especially efficient for a rainbow menu color or live color-changing.
+
     for Idx, Object in next, Library.Registry do
         for Property, ColorIdx in next, Object.Properties do
             if type(ColorIdx) == 'string' then
@@ -368,15 +375,18 @@ function Library:UpdateColorsUsingRegistry()
 end;
 
 function Library:GiveSignal(Signal)
+    -- Only used for signals not attached to library instances, as those should be cleaned up on object destruction by Roblox
     table.insert(Library.Signals, Signal)
 end
 
 function Library:Unload()
+    -- Unload all of the signals
     for Idx = #Library.Signals, 1, -1 do
         local Connection = table.remove(Library.Signals, Idx)
         Connection:Disconnect()
     end
 
+     -- Call our unload callback, maybe to undo some hooks etc
     if Library.OnUnload then
         Library.OnUnload()
     end
@@ -394,18 +404,6 @@ Library:GiveSignal(ScreenGui.DescendantRemoving:Connect(function(Instance)
     end;
 end))
 
-function Library:SetBypassMode(Bool)
-    Library.BypassActive = Bool;
-    for _, Entry in next, Library.HiddenToggles do
-        if Entry.Outer then
-            Entry.Outer.Visible = Bool;
-        end
-        if Entry.Groupbox and Entry.Groupbox.Resize then
-            pcall(function() Entry.Groupbox:Resize() end)
-        end
-    end
-end
-
 local BaseAddons = {};
 
 do
@@ -413,6 +411,7 @@ do
 
     function Funcs:AddColorPicker(Idx, Info)
         local ToggleLabel = self.TextLabel;
+        -- local Container = self.Container;
 
         assert(Info.Default, 'AddColorPicker: Missing default value.');
 
@@ -443,6 +442,7 @@ do
             Parent = ToggleLabel;
         });
 
+        -- Transparency image taken from https://github.com/matas3535/SplixPrivateDrawingLibrary/blob/main/Library.lua cus i'm lazy
         local CheckerFrame = Library:Create('ImageLabel', {
             BorderSizePixel = 0;
             Size = UDim2.new(0, 27, 0, 13);
@@ -451,6 +451,11 @@ do
             Visible = not not Info.Transparency;
             Parent = DisplayFrame;
         });
+
+        -- 1/16/23
+        -- Rewrote this to be placed inside the Library ScreenGui
+        -- There was some issue which caused RelativeOffset to be way off
+        -- Thus the color picker would never show
 
         local PickerFrameOuter = Library:Create('Frame', {
             Name = 'Color';
@@ -654,7 +659,7 @@ do
             Position = UDim2.fromOffset(5, 5);
             TextXAlignment = Enum.TextXAlignment.Left;
             TextSize = 14;
-            Text = ColorPicker.Title,
+            Text = ColorPicker.Title,--Info.Default;
             TextWrapped = false;
             ZIndex = 16;
             Parent = PickerFrameInner;
@@ -1005,7 +1010,7 @@ do
         local KeyPicker = {
             Value = Info.Default;
             Toggled = false;
-            Mode = Info.Mode or 'Toggle';
+            Mode = Info.Mode or 'Toggle'; -- Always, Toggle, Hold
             Type = 'KeyPicker';
             Callback = Info.Callback or function(Value) end;
             ChangedCallback = Info.ChangedCallback or function(New) end;
@@ -1081,7 +1086,7 @@ do
             SortOrder = Enum.SortOrder.LayoutOrder;
             Parent = ModeSelectInner;
         });
-
+        -- Container row: holds label + mobile tap button
         local ContainerRow = Library:Create('Frame', {
             BackgroundTransparency = 1;
             Size = UDim2.new(1, 0, 0, 18);
@@ -1098,8 +1103,9 @@ do
             ClipsDescendants = true;
             ZIndex = 110;
             Parent = ContainerRow;
-        }, true);
+        },  true);
 
+        -- Mobile tap toggle button (circle)
         local TapToggleBtn = Library:Create('TextButton', {
             AnchorPoint = Vector2.new(1, 0.5);
             BackgroundColor3 = Library.BackgroundColor;
@@ -1147,7 +1153,9 @@ do
                 KeyPicker.Toggled = not KeyPicker.Toggled;
                 KeyPicker:DoClick();
             elseif KeyPicker.Mode == 'Always' then
+                -- always on, nothing to do
             elseif KeyPicker.Mode == 'Hold' then
+                -- on mobile tap, act as a sticky toggle instead of hold
                 KeyPicker.TapHoldActive = not KeyPicker.TapHoldActive;
                 KeyPicker.Toggled = KeyPicker.TapHoldActive;
                 KeyPicker:DoClick();
@@ -1222,6 +1230,7 @@ do
 
             Library.RegistryMap[ContainerLabel].Properties.TextColor3 = State and 'AccentColor' or 'FontColor';
 
+            -- Update tap toggle indicator
             TapToggleIndicator.BackgroundTransparency = State and 0 or 1;
 
             local YSize = 0
@@ -1476,6 +1485,7 @@ do
     end;
 
     function Funcs:AddButton(...)
+        -- TODO: Eventually redo this
         local Button = {};
         local function ProcessButtonParams(Class, Obj, ...)
             local Props = select(1, ...)
@@ -1830,20 +1840,28 @@ do
             end);
         end
 
+        -- https://devforum.roblox.com/t/how-to-make-textboxes-follow-current-cursor-position/1368429/6
+        -- thank you nicemike40 :)
+
         local function Update()
             local PADDING = 2
             local reveal = Container.AbsoluteSize.X
 
             if not Box:IsFocused() or Box.TextBounds.X <= reveal - 2 * PADDING then
+                -- we aren't focused, or we fit so be normal
                 Box.Position = UDim2.new(0, PADDING, 0, 0)
             else
+                -- we are focused and don't fit, so adjust position
                 local cursor = Box.CursorPosition
                 if cursor ~= -1 then
+                    -- calculate pixel width of text from start to cursor
                     local subtext = string.sub(Box.Text, 1, cursor-1)
                     local width = TextService:GetTextSize(subtext, Box.TextSize, Box.Font, Vector2.new(math.huge, math.huge)).X
 
+                    -- check if we're inside the box with the cursor
                     local currentCursorPos = Box.Position.X.Offset + width
 
+                    -- adjust if necessary
                     if currentCursorPos < PADDING then
                         Box.Position = UDim2.fromOffset(PADDING-width, 0)
                     elseif currentCursorPos > reveal - PADDING - 1 then
@@ -1989,7 +2007,7 @@ do
 
         ToggleRegion.InputBegan:Connect(function(Input)
             if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
-                Toggle:SetValue(not Toggle.Value)
+                Toggle:SetValue(not Toggle.Value) -- Why was it not like this from the start?
                 Library:AttemptSave();
             end;
         end);
@@ -2013,251 +2031,6 @@ do
         Library:UpdateDependencyBoxes();
 
         return Toggle;
-    end;
-
-    function Funcs:AddHiddenToggle(Idx, Info)
-        local Groupbox = self;
-
-        local Toggle = Funcs.AddToggle(self, Idx, Info);
-
-        local ToggleOuter = Toggle.TextLabel
-            and Toggle.TextLabel.Parent
-            and Toggle.TextLabel.Parent.Parent;
-
-        if ToggleOuter and ToggleOuter:IsA('Frame') then
-            ToggleOuter.Visible = Library.BypassActive;
-        end
-
-        table.insert(Library.HiddenToggles, {
-            Toggle = Toggle;
-            Outer = (ToggleOuter and ToggleOuter:IsA('Frame')) and ToggleOuter or nil;
-            Groupbox = Groupbox;
-        });
-
-        return Toggle;
-    end;
-
-    function Funcs:AddBypassButton(Info)
-        local Groupbox = self;
-        local Container = Groupbox.Container;
-
-        local BtnOuter = Library:Create('Frame', {
-            BackgroundColor3 = Color3.new(0, 0, 0);
-            BorderColor3 = Color3.new(0, 0, 0);
-            Size = UDim2.new(1, -4, 0, 20);
-            ZIndex = 5;
-            Parent = Container;
-        });
-
-        local BtnInner = Library:Create('Frame', {
-            BackgroundColor3 = Library.MainColor;
-            BorderColor3 = Library.OutlineColor;
-            BorderMode = Enum.BorderMode.Inset;
-            BackgroundTransparency = 0.65;
-            Size = UDim2.new(1, 0, 1, 0);
-            ZIndex = 6;
-            Parent = BtnOuter;
-        });
-
-        Library:AddToRegistry(BtnOuter, { BorderColor3 = 'Black' });
-        Library:AddToRegistry(BtnInner, {
-            BackgroundColor3 = 'MainColor';
-            BorderColor3 = 'OutlineColor';
-        });
-
-        Library:Create('UIGradient', {
-            Color = ColorSequence.new({
-                ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-                ColorSequenceKeypoint.new(1, Color3.fromRGB(212, 212, 212))
-            });
-            Rotation = 90;
-            Parent = BtnInner;
-        });
-
-        local BtnLabel = Library:Create('TextLabel', {
-            Size = UDim2.new(1, 0, 1, 0);
-            TextSize = 14;
-            Font = Library.Font;
-            Text = Info.Text or 'AC BYPASS';
-            TextColor3 = Library.RiskColor;
-            BackgroundTransparency = 1;
-            TextStrokeTransparency = 1;
-            ZIndex = 7;
-            Parent = BtnInner;
-        });
-
-        Library:ApplyTextStroke(BtnLabel);
-        Library:AddToRegistry(BtnLabel, { TextColor3 = 'RiskColor' });
-
-        Library:OnHighlight(BtnOuter, BtnOuter,
-            { BorderColor3 = 'RiskColor' },
-            { BorderColor3 = 'Black' }
-        );
-
-        local ConfirmFrame = Library:Create('Frame', {
-            BackgroundColor3 = Library.MainColor;
-            BorderColor3 = Library.RiskColor;
-            BorderMode = Enum.BorderMode.Inset;
-            Size = UDim2.fromOffset(160, 46);
-            Visible = false;
-            ZIndex = 50;
-            Parent = Library.ScreenGui;
-        });
-
-        Library:AddToRegistry(ConfirmFrame, {
-            BackgroundColor3 = 'MainColor';
-            BorderColor3 = 'RiskColor';
-        });
-
-        Library:Create('UIGradient', {
-            Color = ColorSequence.new({
-                ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
-                ColorSequenceKeypoint.new(1, Color3.fromRGB(212, 212, 212))
-            });
-            Rotation = 90;
-            Parent = ConfirmFrame;
-        });
-
-        local AccentStripe = Library:Create('Frame', {
-            BackgroundColor3 = Library.RiskColor;
-            BorderSizePixel = 0;
-            Size = UDim2.new(1, 0, 0, 2);
-            ZIndex = 51;
-            Parent = ConfirmFrame;
-        });
-
-        Library:AddToRegistry(AccentStripe, { BackgroundColor3 = 'RiskColor' });
-
-        local ConfirmLabel = Library:Create('TextLabel', {
-            BackgroundTransparency = 1;
-            Size = UDim2.new(1, 0, 0, 18);
-            Position = UDim2.new(0, 0, 0, 4);
-            Font = Library.Font;
-            TextSize = 13;
-            Text = 'Tem certeza?';
-            TextColor3 = Library.FontColor;
-            TextStrokeTransparency = 1;
-            ZIndex = 52;
-            Parent = ConfirmFrame;
-        });
-
-        Library:ApplyTextStroke(ConfirmLabel);
-        Library:AddToRegistry(ConfirmLabel, { TextColor3 = 'FontColor' });
-
-        local YesBtn = Library:Create('TextButton', {
-            BackgroundColor3 = Library.BackgroundColor;
-            BorderColor3 = Library.OutlineColor;
-            Position = UDim2.fromOffset(6, 24);
-            Size = UDim2.fromOffset(66, 16);
-            Font = Library.Font;
-            Text = '✓ Sim';
-            TextSize = 13;
-            TextColor3 = Color3.fromRGB(100, 220, 100);
-            TextStrokeTransparency = 1;
-            AutoButtonColor = false;
-            ZIndex = 52;
-            Parent = ConfirmFrame;
-        });
-
-        Library:ApplyTextStroke(YesBtn);
-        Library:AddToRegistry(YesBtn, {
-            BackgroundColor3 = 'BackgroundColor';
-            BorderColor3 = 'OutlineColor';
-        });
-
-        local NoBtn = Library:Create('TextButton', {
-            BackgroundColor3 = Library.BackgroundColor;
-            BorderColor3 = Library.OutlineColor;
-            Position = UDim2.fromOffset(82, 24);
-            Size = UDim2.fromOffset(66, 16);
-            Font = Library.Font;
-            Text = '✗ Não';
-            TextSize = 13;
-            TextColor3 = Library.RiskColor;
-            TextStrokeTransparency = 1;
-            AutoButtonColor = false;
-            ZIndex = 52;
-            Parent = ConfirmFrame;
-        });
-
-        Library:ApplyTextStroke(NoBtn);
-        Library:AddToRegistry(NoBtn, {
-            BackgroundColor3 = 'BackgroundColor';
-            BorderColor3 = 'OutlineColor';
-        });
-
-        Library:OnHighlight(YesBtn, YesBtn,
-            { BorderColor3 = Color3.fromRGB(100, 220, 100) },
-            { BorderColor3 = Library.OutlineColor }
-        );
-
-        Library:OnHighlight(NoBtn, NoBtn,
-            { BorderColor3 = Library.RiskColor },
-            { BorderColor3 = Library.OutlineColor }
-        );
-
-        local function UpdateConfirmPos()
-            ConfirmFrame.Position = UDim2.fromOffset(
-                BtnOuter.AbsolutePosition.X,
-                BtnOuter.AbsolutePosition.Y - 50
-            );
-        end
-
-        BtnOuter:GetPropertyChangedSignal('AbsolutePosition'):Connect(UpdateConfirmPos);
-        task.spawn(UpdateConfirmPos);
-
-        local BypassState = { Active = false };
-
-        local function CloseConfirm()
-            ConfirmFrame.Visible = false;
-            Library.OpenedFrames[ConfirmFrame] = nil;
-        end
-
-        local function OpenConfirm()
-            UpdateConfirmPos();
-            ConfirmFrame.Visible = true;
-            Library.OpenedFrames[ConfirmFrame] = true;
-        end
-
-        local function SetBypassVisual(active)
-            BypassState.Active = active;
-            BtnInner.BackgroundTransparency = active and 0 or 0.65;
-            BtnLabel.Text = active and ('✓ ' .. (Info.Text or 'AC BYPASS')) or (Info.Text or 'AC BYPASS');
-            Library:SetBypassMode(active);
-            Library:SafeCallback(Info.OnChanged, active);
-        end
-
-        BtnOuter.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 and not Library:MouseIsOverOpenedFrame() then
-                OpenConfirm();
-            end
-        end);
-
-        YesBtn.MouseButton1Click:Connect(function()
-            CloseConfirm();
-            SetBypassVisual(not BypassState.Active);
-            if Info.Func then
-                Library:SafeCallback(Info.Func, BypassState.Active);
-            end
-            Library:AttemptSave();
-        end);
-
-        NoBtn.MouseButton1Click:Connect(function()
-            CloseConfirm();
-        end);
-
-        Library:GiveSignal(InputService.InputBegan:Connect(function(Input)
-            if Input.UserInputType == Enum.UserInputType.MouseButton1 and ConfirmFrame.Visible then
-                if not Library:IsMouseOverFrame(ConfirmFrame) and not Library:IsMouseOverFrame(BtnOuter) then
-                    CloseConfirm();
-                end
-            end
-        end));
-
-        Groupbox:AddBlank(5);
-        Groupbox:Resize();
-
-        return BypassState;
     end;
 
     function Funcs:AddSlider(Idx, Info)
@@ -2477,7 +2250,7 @@ do
             Value = Info.Multi and {};
             Multi = Info.Multi;
             Type = 'Dropdown';
-            SpecialType = Info.SpecialType;
+            SpecialType = Info.SpecialType; -- can be either 'Player' or 'Team'
             Callback = Info.Callback or function(Value) end;
         };
 
@@ -2986,6 +2759,7 @@ do
     end;
 end;
 
+-- < Create other UI elements >
 do
     Library.NotificationArea = Library:Create('Frame', {
         BackgroundTransparency = 1;
@@ -3067,6 +2841,8 @@ do
     Library.WatermarkText = WatermarkLabel;
     Library:MakeDraggable(Library.Watermark);
 
+
+
     local KeybindOuter = Library:Create('Frame', {
         AnchorPoint = Vector2.new(0, 0.5);
         BackgroundColor3 = Color3.new(0, 0, 0);
@@ -3092,6 +2868,7 @@ do
         BorderColor3 = 'OutlineColor';
     }, true);
 
+    -- Gradient background for keybind widget
     Library:Create('UIGradient', {
         Color = ColorSequence.new({
             ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
@@ -3101,6 +2878,7 @@ do
         Parent = KeybindInner;
     });
 
+    -- Accent left bar
     local KeybindAccentBar = Library:Create('Frame', {
         BackgroundColor3 = Library.AccentColor;
         BorderSizePixel = 0;
@@ -3114,6 +2892,7 @@ do
         BackgroundColor3 = 'AccentColor';
     }, true);
 
+    -- Top accent stripe
     local ColorFrame = Library:Create('Frame', {
         BackgroundColor3 = Library.AccentColor;
         BorderSizePixel = 0;
@@ -3136,6 +2915,7 @@ do
         Parent = KeybindInner;
     });
 
+    -- Separator under header
     local KeybindSeparator = Library:Create('Frame', {
         BackgroundColor3 = Library.OutlineColor;
         BorderSizePixel = 0;
@@ -3175,6 +2955,9 @@ do
     Library.KeybindContainer = KeybindContainer;
     Library:MakeDraggable(KeybindOuter);
 
+    -- ========================
+    -- Mobile Toggle Button
+    -- ========================
     local MobileToggleBtn = Library:Create('TextButton', {
         AnchorPoint = Vector2.new(1, 1);
         BackgroundColor3 = Library.AccentColor;
@@ -3196,6 +2979,7 @@ do
         BackgroundColor3 = 'AccentColor';
     });
 
+    -- Hamburger icon lines
     for i = 0, 2 do
         Library:Create('Frame', {
             AnchorPoint = Vector2.new(0.5, 0.5);
@@ -3208,6 +2992,7 @@ do
         });
     end
 
+    -- Shadow under mobile button
     local MobileShadow = Library:Create('ImageLabel', {
         AnchorPoint = Vector2.new(0.5, 0.5);
         BackgroundTransparency = 1;
@@ -3228,6 +3013,9 @@ do
 
     Library.MobileToggleButton = MobileToggleBtn;
 
+    -- ========================
+    -- Leaderboard Widget
+    -- ========================
     Library.PlayerPriorities = {};
 
     function Library:SetPlayerPriority(Player, Level, Label, PriorityColor)
@@ -3281,6 +3069,7 @@ do
         Parent = LeaderboardInner;
     });
 
+    -- Accent bar top
     local LBAccentBar = Library:Create('Frame', {
         BackgroundColor3 = Library.AccentColor;
         BorderSizePixel = 0;
@@ -3303,6 +3092,7 @@ do
         Parent = LeaderboardInner;
     });
 
+    -- Header separator
     Library:Create('Frame', {
         BackgroundColor3 = Library.OutlineColor;
         BorderSizePixel = 0;
@@ -3312,6 +3102,7 @@ do
         Parent = LeaderboardInner;
     });
 
+    -- Column headers
     local LBHeaderRow = Library:Create('Frame', {
         BackgroundTransparency = 1;
         Position = UDim2.new(0, 0, 0, 26);
@@ -3374,6 +3165,7 @@ do
         Parent = LBScrolling;
     });
 
+    -- Tooltip for player hover
     local LBTooltip = Library:Create('Frame', {
         BackgroundColor3 = Library.MainColor;
         BorderColor3 = Library.OutlineColor;
@@ -3397,6 +3189,7 @@ do
         Parent = LBTooltip;
     });
 
+    -- Tooltip accent bar
     Library:Create('Frame', {
         BackgroundColor3 = Library.AccentColor;
         BorderSizePixel = 0;
@@ -3501,6 +3294,7 @@ do
             TooltipPriority.Visible = false;
         end
 
+        -- Fetch avatar
         pcall(function()
             local thumbType = Enum.ThumbnailType.HeadShot;
             local thumbSize = Enum.ThumbnailSize.Size48x48;
@@ -3515,6 +3309,7 @@ do
         LBTooltip.Visible = false;
     end
 
+    -- Priority cycle levels (click circle to cycle)
     Library.PriorityCycle = {
         { Level = 0, Label = '', Color = Color3.fromRGB(128, 128, 128) },
         { Level = 1, Label = 'Friend', Color = Color3.fromRGB(100, 255, 100) }
@@ -3608,6 +3403,7 @@ do
                 BackgroundColor3 = 'BackgroundColor';
             });
 
+            -- Priority circle (clickable to cycle priority)
             local priority = Library:GetPlayerPriority(player);
             local dotColor = (priority and priority.Level > 0) and priority.Color
                 or (player.Team and player.Team.TeamColor and player.Team.TeamColor.Color)
@@ -3630,10 +3426,12 @@ do
                 Parent = PriorityDot;
             });
 
+            -- Click circle to cycle priority
             PriorityDot.MouseButton1Click:Connect(function()
                 Library:CyclePlayerPriority(player);
             end)
 
+            -- Player name
             Library:CreateLabel({
                 Position = UDim2.fromOffset(22, 0);
                 Size = UDim2.new(1, -80, 1, 0);
@@ -3644,6 +3442,7 @@ do
                 Parent = Row;
             });
 
+            -- Priority badge or team name
             if priority and priority.Label ~= '' then
                 Library:CreateLabel({
                     AnchorPoint = Vector2.new(1, 0.5);
@@ -3670,6 +3469,7 @@ do
                 });
             end
 
+            -- Hover events for tooltip (Active = true makes hover reliable)
             local hovering = false;
             Row.InputBegan:Connect(function(Input)
                 if Input.UserInputType == Enum.UserInputType.MouseMovement then
@@ -3705,6 +3505,7 @@ do
         end
     end
 
+    -- Auto-update leaderboard
     Library:GiveSignal(Players.PlayerAdded:Connect(function()
         if LeaderboardOuter.Visible then
             task.defer(Library.UpdateLeaderboard, Library);
@@ -3717,6 +3518,9 @@ do
         end
     end))
 
+    -- ========================
+    -- Viewmodel Widget
+    -- ========================
     local ViewmodelOuter = Library:Create('Frame', {
         AnchorPoint = Vector2.new(0, 1);
         BackgroundColor3 = Color3.new(0, 0, 0);
@@ -3751,6 +3555,7 @@ do
         Parent = ViewmodelInner;
     });
 
+    -- accent top
     local VMAccent = Library:Create('Frame', {
         BackgroundColor3 = Library.AccentColor;
         BorderSizePixel = 0;
@@ -3773,6 +3578,7 @@ do
         Parent = ViewmodelInner;
     });
 
+    -- refresh button
     local VMRefreshBtn = Library:Create('TextButton', {
         AnchorPoint = Vector2.new(1, 0);
         BackgroundColor3 = Library.BackgroundColor;
@@ -3794,6 +3600,7 @@ do
         TextColor3 = 'FontColor';
     }, true);
 
+    -- separator
     Library:Create('Frame', {
         BackgroundColor3 = Library.OutlineColor;
         BorderSizePixel = 0;
@@ -3803,6 +3610,7 @@ do
         Parent = ViewmodelInner;
     });
 
+    -- viewport
     local VMViewport = Library:Create('ViewportFrame', {
         BackgroundColor3 = Library.BackgroundColor;
         BorderSizePixel = 0;
@@ -3827,9 +3635,12 @@ do
     VMCamera.Parent = VMViewport;
     VMViewport.CurrentCamera = VMCamera;
 
+    -- clone character into the viewport worldmodel
+    -- returns the model so scripts can attach highlights/chams to it
     Library.ViewmodelModel = nil;
 
     function Library:RefreshViewmodel()
+        -- clear old stuff
         for _, child in next, VMWorldModel:GetChildren() do
             child:Destroy();
         end
@@ -3845,11 +3656,13 @@ do
         if not character then return end
 
         local success = pcall(function()
+            -- make sure we can clone it
             local wasArchivable = character.Archivable;
             character.Archivable = true;
             local clone = character:Clone();
             character.Archivable = wasArchivable;
 
+            -- strip everything that could cause issues
             for _, desc in next, clone:GetDescendants() do
                 if desc:IsA('BaseScript') or desc:IsA('LocalScript')
                     or desc:IsA('Sound') or desc:IsA('ParticleEmitter')
@@ -3859,6 +3672,7 @@ do
                 end
             end
 
+            -- anchor all parts so they don't fall
             for _, part in next, clone:GetDescendants() do
                 if part:IsA('BasePart') then
                     part.Anchored = true;
@@ -3868,6 +3682,7 @@ do
             clone.Parent = VMWorldModel;
             Library.ViewmodelModel = clone;
 
+            -- position camera looking at the character
             local hrp = clone:FindFirstChild('HumanoidRootPart');
             local head = clone:FindFirstChild('Head');
             local pivot = hrp or head;
@@ -3885,9 +3700,10 @@ do
         Library:RefreshViewmodel();
     end)
 
+    -- viewmodel camera controls (drag to rotate, scroll to zoom)
     local vmDragging = false;
     local vmLastMouse = Vector2.new(0, 0);
-    local vmAngleX = 0.4;
+    local vmAngleX = 0.4;  -- initial rotation
     local vmAngleY = 0.3;
     local vmDistance = 7;
     local vmFocusOffset = Vector3.new(0, 0, 0);
@@ -3940,15 +3756,18 @@ do
         end
     end)
 
+    -- override RefreshViewmodel to use orbiting camera after clone
     local _origRefresh = Library.RefreshViewmodel;
     function Library:RefreshViewmodel()
         _origRefresh(Library);
+        -- reset orbit and position camera
         vmAngleX = 0.4;
         vmAngleY = 0.3;
         vmDistance = 7;
         UpdateVMCamera();
     end
 
+    -- hooks for esp/chams: call these to add visuals to the viewmodel
     function Library:AddViewmodelHighlight(Props)
         if not Library.ViewmodelModel then return nil end
         local highlight = Instance.new('Highlight');
@@ -3980,6 +3799,9 @@ do
         end
     end
 
+    -- ========================
+    -- Chat Logger Widget
+    -- ========================
     local ChatLogOuter = Library:Create('Frame', {
         AnchorPoint = Vector2.new(0.5, 1);
         BackgroundColor3 = Color3.new(0, 0, 0);
@@ -4014,6 +3836,7 @@ do
         Parent = ChatLogInner;
     });
 
+    -- Accent left bar
     Library:Create('Frame', {
         BackgroundColor3 = Library.AccentColor;
         BorderSizePixel = 0;
@@ -4022,6 +3845,7 @@ do
         Parent = ChatLogInner;
     });
 
+    -- Accent top bar
     local ChatAccentTop = Library:Create('Frame', {
         BackgroundColor3 = Library.AccentColor;
         BorderSizePixel = 0;
@@ -4044,6 +3868,7 @@ do
         Parent = ChatLogInner;
     });
 
+    -- Clear button
     local ChatClearBtn = Library:Create('TextButton', {
         AnchorPoint = Vector2.new(1, 0);
         BackgroundColor3 = Library.BackgroundColor;
@@ -4065,6 +3890,7 @@ do
         TextColor3 = 'FontColor';
     }, true);
 
+    -- Header separator
     Library:Create('Frame', {
         BackgroundColor3 = Library.OutlineColor;
         BorderSizePixel = 0;
@@ -4115,6 +3941,7 @@ do
         ChatLogOrder = ChatLogOrder + 1;
         local timestamp = os.date('%H:%M:%S');
 
+        -- check priority color first, then team, then default
         local displayColor = teamColor or Library.FontColor;
         if playerObj then
             local priority = Library:GetPlayerPriority(playerObj);
@@ -4123,7 +3950,8 @@ do
             end
         end
 
-        local msgWidth = 300 - 126;
+        -- calculate message height for wrapping
+        local msgWidth = 300 - 126; -- approximate available width
         local _, textH = Library:GetTextBounds(message, Library.Font, 12, Vector2.new(msgWidth, 9999));
         local rowHeight = math.max(16, textH + 4);
 
@@ -4135,6 +3963,7 @@ do
             Parent = ChatScrolling;
         });
 
+        -- timestamp
         Library:CreateLabel({
             Size = UDim2.new(0, 50, 0, 16);
             Position = UDim2.new(0, 0, 0, 0);
@@ -4146,6 +3975,7 @@ do
             Parent = MsgFrame;
         });
 
+        -- player name (not registered so it keeps custom color)
         Library:Create('TextLabel', {
             Size = UDim2.new(0, 70, 0, 16);
             Position = UDim2.new(0, 52, 0, 0);
@@ -4160,6 +3990,7 @@ do
             Parent = MsgFrame;
         });
 
+        -- message text (wraps to new lines)
         Library:CreateLabel({
             Size = UDim2.new(1, -126, 0, rowHeight);
             Position = UDim2.new(0, 124, 0, 0);
@@ -4174,16 +4005,19 @@ do
 
         table.insert(ChatLogMessages, MsgFrame);
 
+        -- trim old
         if #ChatLogMessages > ChatLogMaxMessages then
             local old = table.remove(ChatLogMessages, 1);
             if old and old.Parent then old:Destroy() end
         end
 
+        -- auto-scroll
         task.defer(function()
             ChatScrolling.CanvasPosition = Vector2.new(0, ChatScrolling.AbsoluteCanvasSize.Y);
         end)
     end
 
+    -- Clear button handler
     ChatClearBtn.MouseButton1Click:Connect(function()
         for _, msg in next, ChatLogMessages do
             if msg and msg.Parent then msg:Destroy() end
@@ -4192,6 +4026,7 @@ do
         ChatLogOrder = 0;
     end)
 
+    -- listen to chat
     local function ConnectPlayerChat(player)
         Library:GiveSignal(player.Chatted:Connect(function(message)
             if not ChatLogOuter.Visible then return end
@@ -4220,6 +4055,9 @@ do
     end
 
 end;
+
+
+
 
 function Library:SetWatermarkVisibility(Bool)
     Library.Watermark.Visible = Bool;
@@ -4317,12 +4155,14 @@ function Library:Notify(Text, Time)
         BackgroundColor3 = 'AccentColor';
     }, true);
 
+    -- Slide up + fade in animation
     local tweenInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out);
     TweenService:Create(NotifyInner, tweenInfo, { BackgroundTransparency = 0 }):Play();
     TweenService:Create(InnerFrame, tweenInfo, { BackgroundTransparency = 0 }):Play();
     TweenService:Create(NotifyLabel, tweenInfo, { TextTransparency = 0 }):Play();
     TweenService:Create(BottomColor, tweenInfo, { BackgroundTransparency = 0 }):Play();
 
+    -- Also fade the UIStroke on the label
     for _, child in next, NotifyLabel:GetChildren() do
         if child:IsA('UIStroke') then
             child.Transparency = 1;
@@ -4333,6 +4173,7 @@ function Library:Notify(Text, Time)
     task.spawn(function()
         wait(Time or 5);
 
+        -- Fade out animation
         local fadeInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.In);
         TweenService:Create(NotifyInner, fadeInfo, { BackgroundTransparency = 1 }):Play();
         TweenService:Create(InnerFrame, fadeInfo, { BackgroundTransparency = 1 }):Play();
@@ -4406,6 +4247,7 @@ function Library:CreateWindow(...)
         BorderColor3 = 'AccentColor';
     });
 
+    -- Centered title with accent color split support
     local TitleAccentText = ''
     local TitleRestText = ''
 
@@ -4510,6 +4352,7 @@ function Library:CreateWindow(...)
         ZIndex = 2;
         Parent = MainSectionInner;
     });
+    
 
     Library:AddToRegistry(TabContainer, {
         BackgroundColor3 = 'MainColor';
@@ -4670,6 +4513,7 @@ function Library:CreateWindow(...)
             local BoxInner = Library:Create('Frame', {
                 BackgroundColor3 = Library.BackgroundColor;
                 BorderColor3 = Color3.new(0, 0, 0);
+                -- BorderMode = Enum.BorderMode.Inset;
                 Size = UDim2.new(1, -2, 1, -2);
                 Position = UDim2.new(0, 1, 0, 1);
                 ZIndex = 4;
@@ -4769,6 +4613,7 @@ function Library:CreateWindow(...)
             local BoxInner = Library:Create('Frame', {
                 BackgroundColor3 = Library.BackgroundColor;
                 BorderColor3 = Color3.new(0, 0, 0);
+                -- BorderMode = Enum.BorderMode.Inset;
                 Size = UDim2.new(1, -2, 1, -2);
                 Position = UDim2.new(0, 1, 0, 1);
                 ZIndex = 4;
@@ -4924,6 +4769,7 @@ function Library:CreateWindow(...)
                 Tab:AddBlank(3);
                 Tab:Resize();
 
+                -- Show first tab (number is 2 cus of the UIListLayout that also sits in that instance)
                 if #TabboxButtons:GetChildren() == 2 then
                     Tab:Show();
                 end;
@@ -4950,6 +4796,7 @@ function Library:CreateWindow(...)
             end;
         end);
 
+        -- This was the first tab added, so we show it by default.
         if #TabContainer:GetChildren() == 1 then
             Tab:ShowTab();
         end;
@@ -4982,9 +4829,11 @@ function Library:CreateWindow(...)
         ModalElement.Modal = Toggled;
 
         if Toggled then
+            -- A bit scuffed, but if we're going from not toggled -> toggled we want to show the frame immediately so that the fade is visible.
             Outer.Visible = true;
 
             task.spawn(function()
+                -- TODO: add cursor fade?
                 local State = InputService.MouseIconEnabled;
 
                 local Cursor = Drawing.new('Triangle');
